@@ -1,0 +1,9 @@
+---
+# Example variables for the 'wordpress' group.
+# Do NOT commit your real token. To store the real token securely use ansible-vault
+# and name the file `group_vars/wordpress.yml` (encrypted).
+
+cloudflare_api_token: "PUT_YOUR_CLOUDFLARE_TOKEN_HERE"
+
+# Example use (local testing):
+# ansible-playbook -i ansible/gcp_compute.yml ansible/site.yml -e @group_vars/wordpress.yml

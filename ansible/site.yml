@@ -1,0 +1,213 @@
+---
+- hosts: wordpress
+  become: true
+  vars:
+    domain: "tjarvenpaa.site"
+    www_domain: "www.tjarvenpaa.site"
+    # If true, playbook will attempt HTTP-01 via certbot --nginx when no Cloudflare token.
+    # Leave false if domain is proxied by Cloudflare (recommended to use DNS-01 instead).
+    allow_http_challenge: false
+    # Provide Cloudflare API token via inventory, extra-vars or Ansible Vault
+    # Example: ansible-playbook -i ansible/gcp_compute.yml ansible/site.yml -e cloudflare_api_token=XXXX
+    # If not provided, the playbook will attempt the nginx plugin fallback (http-01)
+    cloudflare_api_token: null
+
+  tasks:
+    - name: Ensure certbot, nginx and certbot plugins are installed
+      apt:
+        name:
+          - software-properties-common
+          - certbot
+          - python3-certbot-dns-cloudflare
+          - nginx
+        update_cache: yes
+        state: present
+
+    - name: Deploy stable HTTP-only nginx site (serves ACME challenge and redirects)
+      copy:
+        dest: /etc/nginx/sites-available/{{ domain }}.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain }} {{ www_domain }};
+
+              location /.well-known/acme-challenge/ {
+                  root /var/www/html;
+                  try_files $uri =404;
+              }
+
+              location / {
+                  return 301 https://$host$request_uri;
+              }
+          }
+      notify: Reload nginx
+
+    - name: Ensure symlink enabled for HTTP site
+      file:
+        src: /etc/nginx/sites-available/{{ domain }}.conf
+        dest: /etc/nginx/sites-enabled/{{ domain }}.conf
+        state: link
+      notify: Reload nginx
+
+    - name: Find certbot-created nginx files
+      find:
+        paths: /etc/nginx/sites-enabled
+        patterns: '*-le-ssl.conf'
+        recurse: no
+      register: certbot_generated
+
+    - name: Also find certbot-managed files containing marker text
+      shell: "grep -lR --exclude-dir=.. 'managed by Certbot' /etc/nginx/sites-enabled || true"
+      register: certbot_marker_files
+      changed_when: false
+
+    - name: Remove certbot-created files (pattern)
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ certbot_generated.files }}"
+      when: certbot_generated.matched > 0
+      notify: Reload nginx
+
+    - name: Remove certbot-managed files (marker)
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ certbot_marker_files.stdout_lines }}"
+      when: certbot_marker_files.stdout_lines | length > 0
+      notify: Reload nginx
+
+    - name: Deploy forwarded_proto.conf to map X-Forwarded-Proto to fastcgi HTTPS
+      copy:
+        dest: /etc/nginx/conf.d/forwarded_proto.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Map X-Forwarded-Proto header to fastcgi HTTPS value
+          map $http_x_forwarded_proto $fastcgi_https {
+            default off;
+            "https" on;
+          }
+      notify: Reload nginx
+
+    - name: Ensure site fastcgi_param HTTPS uses mapped fastcgi_https
+      lineinfile:
+        path: /etc/nginx/sites-available/{{ domain }}.conf
+        regexp: '^\s*fastcgi_param\s+HTTPS\s+'
+        line: '        fastcgi_param HTTPS $fastcgi_https;'
+        insertafter: '^\s*location ~ \\\.php\$\s*{'
+        create: yes
+      notify: Reload nginx
+
+    - name: Ensure nginx is running
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Create web root
+      file:
+        path: /var/www/html
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Create Cloudflare credentials file for certbot (if token provided)
+      copy:
+        dest: /etc/letsencrypt/cloudflare.ini
+        content: |
+          dns_cloudflare_api_token = {{ cloudflare_api_token }}
+        owner: root
+        group: root
+        mode: '0600'
+      when: cloudflare_api_token is not none
+
+    - name: Obtain certificate using Cloudflare DNS plugin (DNS-01) when token provided
+      command: >
+        certbot certonly --non-interactive --agree-tos --email admin@{{ domain }}
+        --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+        -d {{ domain }} -d {{ www_domain }}
+      args:
+        creates: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+      register: certbot_dns_result
+      failed_when: certbot_dns_result.rc not in [0,1]
+      when: cloudflare_api_token is not none
+
+    - name: Warn and skip HTTP-01 fallback when Cloudflare proxy is likely in use
+      debug:
+        msg: >
+          Cloudflare API token not provided and allow_http_challenge is false.
+          Skipping certbot --nginx HTTP-01 flow to avoid certbot editing nginx and causing redirect loops.
+      when: cloudflare_api_token is none and not allow_http_challenge
+
+    - name: (Optional) Run certbot --nginx fallback when allowed
+      command: >
+        certbot --nginx -n --agree-tos --redirect -m admin@{{ domain }} -d {{ domain }} -d {{ www_domain }}
+      args:
+        creates: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+      register: certbot_run
+      failed_when: certbot_run.rc not in [0,1]
+      when: cloudflare_api_token is none and allow_http_challenge
+
+    - name: Reload nginx
+      service:
+        name: nginx
+        state: reloaded
+    - name: Ensure php-cli is installed (needed for WP-CLI)
+      apt:
+        name:
+          - php-cli
+          - php-mysql
+        state: present
+      become: true
+
+    - name: Check if WP-CLI exists
+      stat:
+        path: /usr/local/bin/wp
+      register: wp_cli_stat
+
+    - name: Install WP-CLI if missing
+      get_url:
+        url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+        dest: /usr/local/bin/wp
+        mode: '0755'
+      when: not wp_cli_stat.stat.exists
+
+    - name: Wait for certificate to exist
+      wait_for:
+        path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+        state: present
+        timeout: 300
+
+    - name: Ensure WordPress siteurl is set to HTTPS (use WP-CLI)
+      args:
+        warn: false
+      command: >
+        sudo -u www-data /usr/local/bin/wp option get siteurl --path=/var/www/html
+      register: wp_siteurl_check
+      failed_when: false
+
+    - name: Set siteurl to https if not already
+      command: >
+        sudo -u www-data /usr/local/bin/wp option update siteurl "https://{{ domain }}" --path=/var/www/html
+      when: wp_siteurl_check is defined and (wp_siteurl_check.stdout | default('') != ('https://' ~ domain))
+
+    - name: Set home to https if not already
+      command: >
+        sudo -u www-data /usr/local/bin/wp option update home "https://{{ domain }}" --path=/var/www/html
+      when: wp_siteurl_check is defined and (wp_siteurl_check.stdout | default('') != ('https://' ~ domain))
+
+
+  handlers:
+    - name: Reload nginx
+      become: true
+      service:
+        name: nginx
+        state: reloaded
+
+

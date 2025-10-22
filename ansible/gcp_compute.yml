@@ -1,0 +1,9 @@
+plugin: google.cloud.gcp_compute
+projects:
+  - wp-on-gcp-475810
+auth_kind: serviceaccount
+service_account_file: /home/tjarvenpaa/ansible-sa.json
+compose:
+  ansible_host: networkInterfaces[0].accessConfigs[0].natIP
+groups:
+  wordpress: "'wp-instance' in name"
