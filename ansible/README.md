@@ -10,7 +10,7 @@ Quick start
 
 ```ini
 [wordpress]
-35.228.94.221 ansible_user=tjarvenpaa ansible_ssh_private_key_file=~/.ssh/google_compute_engine
+35.228.94.221 ansible_user=UserName ansible_ssh_private_key_file=~/.ssh/google_compute_engine
 ```
 
 Then run:
@@ -53,7 +53,7 @@ compose:
 
 ```bash
 ansible-inventory -i ansible/gcp_compute.yml --list
-ansible -i ansible/gcp_compute.yml -m ping wordpress -u tjarvenpaa --private-key=~/.ssh/google_compute_engine
+ansible -i ansible/gcp_compute.yml -m ping wordpress -u UserName --private-key=~/.ssh/google_compute_engine
 ```
 
 Notes on Cloudflare and cert issuance
@@ -88,16 +88,16 @@ cloudflare_api_token: "YOUR_REAL_TOKEN_HERE"
 
 ```bash
 ansible-playbook -i ansible/gcp_compute.yml ansible/site.yml \
-  --ask-vault-pass -u tjarvenpaa --private-key=~/.ssh/google_compute_engine
+  --ask-vault-pass -u UserName --private-key=~/.ssh/google_compute_engine
 ```
 
 3) Optionally, use a vault password file (keep it secure and out of repo):
 
 ```bash
 ansible-playbook -i ansible/gcp_compute.yml ansible/site.yml \
-  --vault-password-file ~/.vault_pass.txt -u tjarvenpaa --private-key=~/.ssh/google_compute_engine
+  --vault-password-file ~/.vault_pass.txt -u UserName --private-key=~/.ssh/google_compute_engine
 ```
 
-I added `ansible/group_vars/wordpress.yml.example` to show the variable name and `.gitignore` was updated to avoid accidentally committing the real `group_vars/wordpress.yml`.
+
 
 
