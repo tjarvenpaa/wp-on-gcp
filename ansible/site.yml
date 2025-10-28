@@ -2,8 +2,8 @@
 - hosts: wordpress
   become: true
   vars:
-    domain: "tjarvenpaa.site"
-    www_domain: "www.tjarvenpaa.site"
+    domain: "DomainName"
+    www_domain: "www.DomainName"
     # If true, playbook will attempt HTTP-01 via certbot --nginx when no Cloudflare token.
     # Leave false if domain is proxied by Cloudflare (recommended to use DNS-01 instead).
     allow_http_challenge: false
